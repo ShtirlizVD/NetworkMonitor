@@ -15,6 +15,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.networkmonitor.network.GitHubUploader
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
