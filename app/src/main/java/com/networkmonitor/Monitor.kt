@@ -401,9 +401,26 @@ class MainViewModel : ViewModel() {
     private val _uploadStatus = MutableStateFlow("")
     val uploadStatus: StateFlow<String> = _uploadStatus
     
+    private val _githubToken = MutableStateFlow("")
+    val githubToken: StateFlow<String> = _githubToken
+    
     val alarmEnabled: Boolean get() = MonitorService.alarmEnabled
     
     fun toggleAlarm() { MonitorService.alarmEnabled = !MonitorService.alarmEnabled }
+    
+    fun loadToken(ctx: Context) {
+        val prefs = ctx.getSharedPreferences("networkmonitor", Context.MODE_PRIVATE)
+        val token = prefs.getString("github_token", "") ?: ""
+        _githubToken.value = token
+        GitHubUploader.setToken(token)
+    }
+    
+    fun saveToken(ctx: Context, token: String) {
+        val prefs = ctx.getSharedPreferences("networkmonitor", Context.MODE_PRIVATE)
+        prefs.edit().putString("github_token", token).apply()
+        _githubToken.value = token
+        GitHubUploader.setToken(token)
+    }
     
     fun checkPerms(ctx: Context): Boolean {
         val perms = mutableListOf(Manifest.permission.READ_PHONE_STATE, Manifest.permission.ACCESS_NETWORK_STATE)

@@ -55,14 +55,18 @@ fun Screen(vm: MainViewModel = viewModel()) {
     val hasRoot by vm.hasRoot.collectAsState()
     val rootMessage by vm.rootMessage.collectAsState()
     val uploadStatus by vm.uploadStatus.collectAsState()
+    val githubToken by vm.githubToken.collectAsState()
     
     var showExport by remember { mutableStateOf(false) }
+    var showTokenDialog by remember { mutableStateOf(false) }
+    var tokenInput by remember { mutableStateOf("") }
     
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (!it.values.all { b -> b }) Toast.makeText(ctx, "Требуются разрешения", Toast.LENGTH_SHORT).show()
     }
     
     LaunchedEffect(Unit) {
+        vm.loadToken(ctx)
         if (!vm.checkPerms(ctx)) {
             val perms = mutableListOf(Manifest.permission.READ_PHONE_STATE, Manifest.permission.ACCESS_NETWORK_STATE)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) perms.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -90,6 +94,16 @@ fun Screen(vm: MainViewModel = viewModel()) {
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                 actions = {
+                    IconButton(onClick = { 
+                        tokenInput = githubToken
+                        showTokenDialog = true 
+                    }) { 
+                        Icon(
+                            if (githubToken.isNotBlank()) Icons.Default.CheckCircle else Icons.Default.Settings, 
+                            "Токен",
+                            tint = if (githubToken.isNotBlank()) Color(0xFF4CAF50) else Color.Gray
+                        ) 
+                    }
                     IconButton(onClick = { showExport = true }) { Icon(Icons.Default.Share, "Экспорт") }
                 }
             )
@@ -393,6 +407,38 @@ fun Screen(vm: MainViewModel = viewModel()) {
                 }) { Text("Экспорт") }
             },
             dismissButton = { TextButton({ showExport = false }) { Text("Отмена") } }
+        )
+    }
+    
+    if (showTokenDialog) {
+        AlertDialog(
+            onDismissRequest = { showTokenDialog = false },
+            title = { Text("GitHub Token") },
+            text = {
+                Column {
+                    Text("Введите GitHub Personal Access Token с правом 'gist'.", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Создать: github.com/settings/tokens/new", style = MaterialTheme.typography.bodySmall, color = Color(0xFF2196F3))
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = tokenInput,
+                        onValueChange = { tokenInput = it },
+                        label = { Text("Token") },
+                        placeholder = { Text("ghp_xxxx") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton({
+                    vm.saveToken(ctx, tokenInput)
+                    showTokenDialog = false
+                }) { Text("Сохранить") }
+            },
+            dismissButton = {
+                TextButton({ showTokenDialog = false }) { Text("Отмена") }
+            }
         )
     }
 }
