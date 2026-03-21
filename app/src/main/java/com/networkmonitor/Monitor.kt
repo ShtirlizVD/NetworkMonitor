@@ -39,7 +39,14 @@ data class NetworkEvent(
     val type: String,
     val previousState: String,
     val newState: String,
-    val durationSeconds: Long = 0
+    val durationSeconds: Long = 0,
+    // Дополнительные технические данные
+    val signalLevel: Int = 0,
+    val networkType: String = "",
+    val operatorName: String = "",
+    val simState: String = "",
+    val imsRegistered: Boolean = false,
+    val cellInfo: String = ""
 )
 
 data class NetworkStats(
@@ -239,9 +246,79 @@ class MonitorService : Service() {
     }
     
     private fun addEvent(type: String, prev: String, next: String, dur: Long) {
+        val signal = tm?.signalStrength
+        val netType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) tm?.dataNetworkType else tm?.networkType
+        
         val list = events.value.toMutableList()
-        list.add(0, NetworkEvent(timeFormat.format(Date()), type, prev, next, dur))
+        list.add(0, NetworkEvent(
+            timestamp = timeFormat.format(Date()),
+            type = type,
+            previousState = prev,
+            newState = next,
+            durationSeconds = dur,
+            signalLevel = signal?.level ?: 0,
+            networkType = getNetName(netType ?: 0),
+            operatorName = tm?.networkOperatorName ?: "",
+            simState = getSimState(),
+            imsRegistered = checkIms(),
+            cellInfo = getCellInfo()
+        ))
         events.value = list.take(100)
+    }
+    
+    private fun getSimState(): String {
+        return when (tm?.simState) {
+            TelephonyManager.SIM_STATE_ABSENT -> "ABSENT"
+            TelephonyManager.SIM_STATE_PIN_REQUIRED -> "PIN_REQ"
+            TelephonyManager.SIM_STATE_PUK_REQUIRED -> "PUK_REQ"
+            TelephonyManager.SIM_STATE_NETWORK_LOCKED -> "NET_LOCKED"
+            TelephonyManager.SIM_STATE_READY -> "READY"
+            TelephonyManager.SIM_STATE_NOT_READY -> "NOT_READY"
+            TelephonyManager.SIM_STATE_PERM_DISABLED -> "PERM_DISABLED"
+            TelephonyManager.SIM_STATE_CARD_IO_ERROR -> "IO_ERROR"
+            else -> "UNKNOWN"
+        }
+    }
+    
+    private fun getCellInfo(): String {
+        return try {
+            val cells = tm?.allCellInfo ?: return "N/A"
+            val sb = StringBuilder()
+            
+            for (cell in cells) {
+                when (cell) {
+                    is CellInfoLte -> {
+                        val lte = cell.cellSignalStrength
+                        sb.append("LTE: RSRP=${lte.rsrp}dBm, RSRQ=${lte.rsrq}dB, RSSI=${lte.rssi}dBm, SNR=${lte.rssnr}dB")
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            sb.append(", BW=${lte.bandwidth}kHz")
+                        }
+                        val id = cell.cellIdentity
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            sb.append(", PCI=${id.pci}, EARFCN=${id.earfcn}")
+                        }
+                    }
+                    is CellInfoGsm -> {
+                        val gsm = cell.cellSignalStrength
+                        sb.append("GSM: ${gsm.dbm}dBm, ASU=${gsm.asuLevel}")
+                    }
+                    is CellInfoWcdma -> {
+                        val wcdma = cell.cellSignalStrength
+                        sb.append("WCDMA: ${wcdma.dbm}dBm, ASU=${wcdma.asuLevel}")
+                    }
+                    is CellInfoNr -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            val nr = cell.cellSignalStrength
+                            sb.append("NR: SSRSRP=${nr.ssRsrp}dBm, SSRSRQ=${nr.ssRsrq}dB")
+                        }
+                    }
+                }
+                sb.append("; ")
+            }
+            sb.toString().trimEnd(' ', ';').ifEmpty { "N/A" }
+        } catch (e: Exception) {
+            "Error: ${e.message}"
+        }
     }
     
     private fun checkAlarm() {
@@ -423,7 +500,11 @@ class MainViewModel : ViewModel() {
     }
     
     fun checkPerms(ctx: Context): Boolean {
-        val perms = mutableListOf(Manifest.permission.READ_PHONE_STATE, Manifest.permission.ACCESS_NETWORK_STATE)
+        val perms = mutableListOf(
+            Manifest.permission.READ_PHONE_STATE, 
+            Manifest.permission.ACCESS_NETWORK_STATE,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) perms.add(Manifest.permission.POST_NOTIFICATIONS)
         val ok = perms.all { ContextCompat.checkSelfPermission(ctx, it) == PackageManager.PERMISSION_GRANTED }
         _hasPerms.value = ok
@@ -523,17 +604,35 @@ class MainViewModel : ViewModel() {
     
     fun export(): String {
         return buildString {
-            appendLine("=== МОНИТОР СЕТИ ===")
+            appendLine("=== МОНИТОР СЕТИ - ДЕТАЛЬНЫЙ ЛОГ ===")
             appendLine("Дата: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
             appendLine()
-            appendLine("Статистика: ${stats.value.lossCount} потерь, ${stats.value.restoreCount} восстановлений")
+            appendLine("=== СТАТИСТИКА ===")
+            appendLine("Потери сети: ${stats.value.lossCount}")
+            appendLine("Восстановления: ${stats.value.restoreCount}")
             appendLine("Всего офлайн: ${formatDuration(stats.value.totalOfflineSeconds)}")
             appendLine("Максимум офлайн: ${formatDuration(stats.value.longestOfflineSeconds)}")
             appendLine()
-            appendLine("События:")
+            appendLine("=== ТЕКУЩЕЕ СОСТОЯНИЕ ===")
+            appendLine("В сети: ${state.value.isInService}")
+            appendLine("Тип сети: ${state.value.networkTypeName}")
+            appendLine("Оператор: ${state.value.operatorName}")
+            appendLine("Сигнал: ${state.value.signalLevel}/4")
+            appendLine()
+            appendLine("=== ДЕТАЛЬНЫЕ СОБЫТИЯ ===")
+            appendLine()
             events.value.forEach { e ->
-                val dur = if (e.durationSeconds > 0) " (${formatDuration(e.durationSeconds)})" else ""
-                appendLine("[${e.timestamp}] ${e.type}: ${e.previousState} → ${e.newState}$dur")
+                appendLine("--- ${e.timestamp} ---")
+                appendLine("Тип: ${e.type}")
+                appendLine("Смена: ${e.previousState} → ${e.newState}")
+                if (e.durationSeconds > 0) appendLine("Длительность: ${formatDuration(e.durationSeconds)}")
+                appendLine("Сигнал: ${e.signalLevel}/4")
+                appendLine("Тип сети: ${e.networkType}")
+                appendLine("Оператор: ${e.operatorName}")
+                appendLine("SIM: ${e.simState}")
+                appendLine("IMS: ${if (e.imsRegistered) "Зарегистрирован" else "Не зарегистрирован"}")
+                appendLine("Cell Info: ${e.cellInfo}")
+                appendLine()
             }
         }
     }

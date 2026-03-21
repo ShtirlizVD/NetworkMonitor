@@ -67,8 +67,13 @@ fun Screen(vm: MainViewModel = viewModel()) {
     
     LaunchedEffect(Unit) {
         vm.loadToken(ctx)
-        if (!vm.checkPerms(ctx)) {
-            val perms = mutableListOf(Manifest.permission.READ_PHONE_STATE, Manifest.permission.ACCESS_NETWORK_STATE)
+        val hasPerms = vm.checkPerms(ctx)
+        if (!hasPerms) {
+            val perms = mutableListOf(
+                Manifest.permission.READ_PHONE_STATE, 
+                Manifest.permission.ACCESS_NETWORK_STATE,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            )
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) perms.add(Manifest.permission.POST_NOTIFICATIONS)
             permLauncher.launch(perms.toTypedArray())
         }
