@@ -265,61 +265,64 @@ class MonitorService : Service() {
         else -> "UNKNOWN"
     }
     
-    private fun getCellInfo(): String = try {
-        val cells = tm?.allCellInfo ?: return "N/A"
-        val sb = StringBuilder()
-        
-        for (cell in cells) {
-            when (cell) {
-                is CellInfoLte -> {
-                    val lte = cell.cellSignalStrength
-                    sb.append("LTE: RSRP=${lte.rsrp}dBm, RSRQ=${lte.rsrq}dB, RSSI=${lte.rssi}dBm, SNR=${lte.rssnr}dB")
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        sb.append(", BW=${lte.bandwidth}kHz")
+    private fun getCellInfo(): String {
+        return try {
+            val cells = tm?.allCellInfo ?: return "N/A"
+            val sb = StringBuilder()
+            
+            for (cell in cells) {
+                when (cell) {
+                    is CellInfoLte -> {
+                        val lte = cell.cellSignalStrength
+                        sb.append("LTE: RSRP=${lte.rsrp}dBm, RSRQ=${lte.rsrq}dB, RSSI=${lte.rssi}dBm, SNR=${lte.rssnr}dB")
+                        val id = cell.cellIdentity
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            sb.append(", PCI=${id.pci}, EARFCN=${id.earfcn}")
+                        }
                     }
-                    val id = cell.cellIdentity
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        sb.append(", PCI=${id.pci}, EARFCN=${id.earfcn}")
+                    is CellInfoGsm -> {
+                        val gsm = cell.cellSignalStrength
+                        sb.append("GSM: ${gsm.dbm}dBm, ASU=${gsm.asuLevel}")
                     }
-                }
-                is CellInfoGsm -> {
-                    val gsm = cell.cellSignalStrength
-                    sb.append("GSM: ${gsm.dbm}dBm, ASU=${gsm.asuLevel}")
-                }
-                is CellInfoWcdma -> {
-                    val wcdma = cell.cellSignalStrength
-                    sb.append("WCDMA: ${wcdma.dbm}dBm, ASU=${wcdma.asuLevel}")
-                }
-                is CellInfoNr -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        val nr = cell.cellSignalStrength as? CellSignalStrengthNr
-                        if (nr != null) {
-                            sb.append("NR: SSRSRP=${nr.ssRsrp}dBm, SSRSRQ=${nr.ssRsrq}dB")
+                    is CellInfoWcdma -> {
+                        val wcdma = cell.cellSignalStrength
+                        sb.append("WCDMA: ${wcdma.dbm}dBm, ASU=${wcdma.asuLevel}")
+                    }
+                    is CellInfoNr -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            val nr = cell.cellSignalStrength as? CellSignalStrengthNr
+                            if (nr != null) {
+                                sb.append("NR: SSRSRP=${nr.ssRsrp}dBm, SSRSRQ=${nr.ssRsrq}dB")
+                            }
                         }
                     }
                 }
+                sb.append("; ")
             }
-            sb.append("; ")
+            sb.toString().trimEnd(' ', ';').ifEmpty { "N/A" }
+        } catch (e: Exception) {
+            "Error: ${e.message}"
         }
-        sb.toString().trimEnd(' ', ';').ifEmpty { "N/A" }
-    } catch (e: Exception) {
-        "Error: ${e.message}"
     }
     
-    private fun checkIms(): Boolean = try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            tm?.isImsRegistered ?: false
-        } else {
-            try {
-                val process = Runtime.getRuntime().exec(arrayOf("getprop", "gsm.ims.volte", "0"))
-                val result = process.inputStream.bufferedReader().readText().trim()
-                result == "1"
-            } catch (e2: Exception) {
-                false
+    private fun checkIms(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // API 30+: use TelephonyManager.isImsRegistered method via reflection
+                val method = tm?.javaClass?.getMethod("isImsRegistered")
+                method?.invoke(tm) as? Boolean ?: false
+            } else {
+                try {
+                    val process = Runtime.getRuntime().exec(arrayOf("getprop", "gsm.ims.volte", "0"))
+                    val result = process.inputStream.bufferedReader().readText().trim()
+                    result == "1"
+                } catch (e2: Exception) {
+                    false
+                }
             }
+        } catch (e: Exception) {
+            false
         }
-    } catch (e: Exception) {
-        false
     }
     
     private fun checkAlarm() {
