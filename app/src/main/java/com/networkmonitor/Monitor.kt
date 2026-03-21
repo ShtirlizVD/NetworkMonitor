@@ -321,6 +321,19 @@ class MonitorService : Service() {
         }
     }
     
+    private fun checkIms(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val imsManager = getSystemService(android.telephony.ims.ImsManager::class.java)
+                imsManager?.isImsRegistered(0) ?: false
+            } else {
+                false
+            }
+        } catch (e: Exception) { 
+            false 
+        }
+    }
+    
     private fun checkAlarm() {
         val s = state.value
         
@@ -559,18 +572,18 @@ class MainViewModel : ViewModel() {
     
     fun uploadLogs(ctx: Context) {
         viewModelScope.launch(Dispatchers.IO) {
-            _uploadStatus.value = "Собираем логи..."
+            _uploadStatus.value = "Собираем полный лог..."
             try {
                 val collector = LogCollector(ctx)
-                val result = collector.collectAll(compact = true)
+                val result = collector.collectAll(compact = false)
                 val content = collector.formatForGist(result)
                 
-                _uploadStatus.value = "Загружаем на GitHub..."
+                _uploadStatus.value = "Загружаем на GitHub (${content.length / 1024}KB)..."
                 val uploader = GitHubUploader(ctx)
                 val url = uploader.uploadToGist(
-                    filename = "modem_log_${result.timestamp}.txt",
+                    filename = "network_log_${result.timestamp}.txt",
                     content = content,
-                    description = "ModemDoctor Log ${result.timestamp}"
+                    description = "Network Monitor Full Log ${result.timestamp}"
                 )
                 
                 if (url != null) {
@@ -583,6 +596,9 @@ class MainViewModel : ViewModel() {
                 _uploadStatus.value = "❌ Ошибка: ${e.message}"
                 Log.e("MainViewModel", "Upload error", e)
             }
+            
+            delay(10000)
+            _uploadStatus.value = ""
         }
     }
     

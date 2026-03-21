@@ -1,12 +1,9 @@
 package com.networkmonitor
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Build
 import android.telephony.TelephonyManager
 import android.util.Log
-import androidx.core.content.ContextCompat
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -32,9 +29,13 @@ class LogCollector(private val context: Context) {
         val manufacturer: String = Build.MANUFACTURER,
         val model: String = Build.MODEL,
         val device: String = Build.DEVICE,
+        val board: String = Build.BOARD,
         val androidVersion: String = Build.VERSION.RELEASE,
         val sdkVersion: Int = Build.VERSION.SDK_INT,
-        val radioVersion: String = Build.getRadioVersion() ?: "unknown"
+        val buildId: String = Build.ID,
+        val buildFingerprint: String = Build.FINGERPRINT,
+        val radioVersion: String = Build.getRadioVersion() ?: "unknown",
+        val kernelVersion: String = "unknown"
     )
     
     data class NetworkState(
@@ -46,7 +47,7 @@ class LogCollector(private val context: Context) {
         val isRoaming: Boolean = false
     )
 
-    suspend fun collectAll(compact: Boolean = false): LogCollectionResult {
+    fun collectAll(compact: Boolean = false): LogCollectionResult {
         val timestamp = dateFormat.format(Date())
         val errors = mutableListOf<String>()
         val logs = mutableMapOf<String, String>()
@@ -60,6 +61,8 @@ class LogCollector(private val context: Context) {
             logs["telephony_registry"] = collectTelephonyRegistry()
             logs["modem_properties"] = collectModemProperties()
             logs["modem_dmesg"] = collectModemDmesgCompact()
+            logs["ims_state"] = collectImsState()
+            logs["modem_state"] = collectModemState()
         } else {
             logs["radio_logcat"] = collectRadioLogcat()
             logs["modem_dmesg"] = collectModemDmesg()
@@ -69,11 +72,16 @@ class LogCollector(private val context: Context) {
             logs["modem_stats"] = collectModemStats()
             logs["network_interfaces"] = collectNetworkInterfaces()
             logs["last_kmsg"] = collectLastKmsg()
-            logs["modem_crash_logs"] = collectModemCrashLogsCompact()
+            logs["modem_crash_logs"] = collectModemCrashLogs()
+            logs["ims_state"] = collectImsState()
+            logs["modem_state"] = collectModemState()
+            logs["network_settings"] = collectNetworkSettings()
+            logs["service_state"] = collectServiceState()
+            logs["cell_info"] = collectCellInfo()
         }
         
         val deviceInfo = collectDeviceInfo()
-        val networkState = collectNetworkState()
+        val networkState = collectCurrentNetworkState()
         
         return LogCollectionResult(
             timestamp = timestamp,
@@ -155,7 +163,7 @@ class LogCollector(private val context: Context) {
         return output
     }
     
-    private fun collectModemCrashLogsCompact(): String {
+    private fun collectModemCrashLogs(): String {
         val commands = listOf(
             "ls -la /data/tombstones/ 2>/dev/null || echo 'No tombstones'",
             "ls -la /data/vendor/radio/logs/ 2>/dev/null || echo 'No radio logs'"
@@ -164,9 +172,90 @@ class LogCollector(private val context: Context) {
         return output
     }
     
-    private fun collectDeviceInfo(): DeviceInfo = DeviceInfo()
+    private fun collectImsState(): String {
+        val commands = listOf(
+            "dumpsys isms | head -50",
+            "dumpsys ims | head -100",
+            "getprop | grep -i ims",
+            "settings get global ims_volte_enable",
+            "settings get global volte_avail_ovr"
+        )
+        val (_, output) = RootShell.execute(commands)
+        return output
+    }
     
-    private fun collectNetworkState(): NetworkState {
+    private fun collectModemState(): String {
+        val commands = listOf(
+            "cat /sys/class/modem/*/state 2>/dev/null || echo 'No modem state'",
+            "cat /sys/class/power_supply/*/status 2>/dev/null | head -5",
+            "getprop vendor.modem.state",
+            "getprop vendor.ril.state",
+            "cat /proc/interrupts | grep -iE 'modem|hsi2c|i2c' | head -10",
+            "ls -la /dev/cdc-wdm* /dev/qcqmi* /dev/ttyUSB* 2>/dev/null"
+        )
+        val (_, output) = RootShell.execute(commands)
+        return output
+    }
+    
+    private fun collectNetworkSettings(): String {
+        val commands = listOf(
+            "settings get global preferred_network_mode",
+            "settings get global preferred_network_mode0",
+            "settings get global nr_dual_connectivity_enabled",
+            "settings get global volte_vt_enabled",
+            "settings get global wfc_ims_enabled",
+            "getprop persist.radio.networkmode",
+            "getprop persist.vendor.radio.preferred_network_mode",
+            "getprop persist.vendor.radio.wcdma_disabled",
+            "getprop persist.vendor.radio.wcdma_supported",
+            "getprop persist.vendor.radio.disable_csfb",
+            "getprop persist.dbg.ims_volte_enable"
+        )
+        val (_, output) = RootShell.execute(commands)
+        return output
+    }
+    
+    private fun collectServiceState(): String {
+        val commands = listOf(
+            "dumpsys telephony.registry | grep -E 'mServiceState|mDataConnectionState|mSignalStrength'",
+            "dumpsys carrier_config | head -50",
+            "dumpsys phone | grep -E 'networkType|dataState|serviceState' | head -30"
+        )
+        val (_, output) = RootShell.execute(commands)
+        return output
+    }
+    
+    private fun collectCellInfo(): String {
+        val commands = listOf(
+            "dumpsys telephony.registry | grep -A 20 'mCellInfo'",
+            "cat /proc/net/wireless"
+        )
+        val (_, output) = RootShell.execute(commands)
+        return output
+    }
+    
+    private fun collectDeviceInfo(): DeviceInfo {
+        val kernelVersion = try {
+            val process = Runtime.getRuntime().exec("uname -r")
+            val reader = java.io.BufferedReader(java.io.InputStreamReader(process.inputStream))
+            reader.readLine() ?: "unknown"
+        } catch (e: Exception) { "unknown" }
+        
+        return DeviceInfo(
+            manufacturer = Build.MANUFACTURER,
+            model = Build.MODEL,
+            device = Build.DEVICE,
+            board = Build.BOARD,
+            androidVersion = Build.VERSION.RELEASE,
+            sdkVersion = Build.VERSION.SDK_INT,
+            buildId = Build.ID,
+            buildFingerprint = Build.FINGERPRINT,
+            radioVersion = Build.getRadioVersion() ?: "unknown",
+            kernelVersion = kernelVersion
+        )
+    }
+    
+    private fun collectCurrentNetworkState(): NetworkState {
         val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
         
         val networkType = when (telephonyManager.dataNetworkType) {
@@ -199,42 +288,67 @@ class LogCollector(private val context: Context) {
     fun formatForGist(result: LogCollectionResult): String {
         val sb = StringBuilder()
         
-        sb.appendLine("=== MONITORING EVENTS ===")
-        sb.appendLine("Total events: ${MonitorService.events.value.size}")
-        sb.appendLine("Network loss count: ${MonitorService.stats.value.lossCount}")
-        sb.appendLine("Last network loss: ${MonitorService.stats.value.longestOfflineSeconds}s")
+        sb.appendLine("=== МОНИТОР СЕТИ - ПОЛНЫЙ ЛОГ ===")
+        sb.appendLine("Время: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
         sb.appendLine()
         
-        MonitorService.events.value.take(20).forEach { e ->
-            sb.appendLine("[${e.timestamp}] ${e.type}: ${e.previousState} → ${e.newState}")
+        sb.appendLine("=== СТАТИСТИКА ===")
+        sb.appendLine("Потери сети: ${MonitorService.stats.value.lossCount}")
+        sb.appendLine("Восстановления: ${MonitorService.stats.value.restoreCount}")
+        sb.appendLine("Всего офлайн: ${formatDuration(MonitorService.stats.value.totalOfflineSeconds)}")
+        sb.appendLine("Максимум офлайн: ${formatDuration(MonitorService.stats.value.longestOfflineSeconds)}")
+        sb.appendLine()
+        
+        sb.appendLine("=== ДЕТАЛЬНЫЕ СОБЫТИЯ ===")
+        MonitorService.events.value.forEach { e ->
+            sb.appendLine("--- ${e.timestamp} ---")
+            sb.appendLine("Тип: ${e.type}")
+            sb.appendLine("Смена: ${e.previousState} → ${e.newState}")
+            if (e.durationSeconds > 0) sb.appendLine("Длительность: ${formatDuration(e.durationSeconds)}")
+            sb.appendLine("Сигнал: ${e.signalLevel}/4")
+            sb.appendLine("Тип сети: ${e.networkType}")
+            sb.appendLine("Оператор: ${e.operatorName}")
+            sb.appendLine("SIM: ${e.simState}")
+            sb.appendLine("IMS: ${if (e.imsRegistered) "Зарегистрирован" else "Не зарегистрирован"}")
+            sb.appendLine("Cell Info: ${e.cellInfo}")
+            sb.appendLine()
         }
         sb.appendLine()
         
-        sb.appendLine("=== DEVICE INFO ===")
-        sb.appendLine("Device: ${result.deviceInfo.manufacturer} ${result.deviceInfo.model}")
-        sb.appendLine("Android: ${result.deviceInfo.androidVersion}")
-        sb.appendLine("Radio: ${result.deviceInfo.radioVersion}")
+        sb.appendLine("=== ИНФОРМАЦИЯ ОБ УСТРОЙСТВЕ ===")
+        sb.appendLine("Устройство: ${result.deviceInfo.manufacturer} ${result.deviceInfo.model}")
+        sb.appendLine("Кодовое имя: ${result.deviceInfo.device}")
+        sb.appendLine("Платформа: ${result.deviceInfo.board}")
+        sb.appendLine("Android: ${result.deviceInfo.androidVersion} (SDK ${result.deviceInfo.sdkVersion})")
+        sb.appendLine("Build ID: ${result.deviceInfo.buildId}")
+        sb.appendLine("Fingerprint: ${result.deviceInfo.buildFingerprint}")
+        sb.appendLine("Версия радио: ${result.deviceInfo.radioVersion}")
+        sb.appendLine("Версия ядра: ${result.deviceInfo.kernelVersion}")
         sb.appendLine()
         
-        sb.appendLine("=== NETWORK STATE ===")
-        sb.appendLine("Type: ${result.networkState.networkType}")
-        sb.appendLine("Operator: ${result.networkState.networkOperatorName}")
-        sb.appendLine("Signal: ${result.networkState.signalStrength}/4")
+        sb.appendLine("=== ТЕКУЩЕЕ СОСТОЯНИЕ СЕТИ ===")
+        sb.appendLine("Тип: ${result.networkState.networkType}")
+        sb.appendLine("Оператор: ${result.networkState.networkOperatorName} (${result.networkState.networkOperator})")
+        sb.appendLine("SIM: ${result.networkState.simState}")
+        sb.appendLine("Сигнал: ${result.networkState.signalStrength}/4")
+        sb.appendLine("Роуминг: ${if (result.networkState.isRoaming) "Да" else "Нет"}")
         sb.appendLine()
         
         result.logs.forEach { (name, content) ->
             sb.appendLine("=== $name ===")
-            sb.appendLine(content.take(5000))
+            sb.appendLine(content.take(8000))
             sb.appendLine()
         }
         
         if (result.errors.isNotEmpty()) {
-            sb.appendLine("[STDERR]")
-            result.errors.forEach { sb.appendLine(it) }
+            sb.appendLine("=== ОШИБКИ ===")
+            result.errors.forEach { sb.appendLine("❌ $it") }
         }
         
         return sb.toString()
     }
+    
+    private fun formatDuration(s: Long) = if (s < 60) "${s}с" else if (s < 3600) "${s/60}м ${s%60}с" else "${s/3600}ч ${(s%3600)/60}м"
     
     fun saveToFile(result: LogCollectionResult, directory: File): File {
         val filename = "modem_log_${result.timestamp}.txt"
